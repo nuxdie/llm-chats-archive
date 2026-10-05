@@ -977,6 +977,9 @@ def parse_chatgpt_export(export_path: Path) -> dict[str, Any]:
             add_source=lambda source: register_chatgpt_source(source, sources, source_paths),
         )
 
+    if not result["conversations"]:
+        warnings.append("ChatGPT export parsed to zero conversations; the export layout may have changed.")
+
     return {
         "provider": "chatgpt",
         "parser_version": "chatgpt:v2",
@@ -1669,16 +1672,21 @@ def load_chatgpt_payload(export_path: Path) -> Any:
 
 
 def load_chatgpt_payload_from_archive(archive: ZipFile) -> Any:
-    manifest_name = next((name for name in archive.namelist() if name.lower().endswith("export_manifest.json")), None)
-    if manifest_name:
+    # Newer exports also ship sites/export_manifest.json (no logical_files), so prefer the shallowest manifest.
+    manifest_names = sorted(
+        (name for name in archive.namelist() if PurePosixPath(name).name.lower() == "export_manifest.json"),
+        key=lambda name: (name.count("/"), len(name)),
+    )
+    for manifest_name in manifest_names:
         with archive.open(manifest_name) as handle:
             manifest = json.load(handle)
         sharded = load_chatgpt_payload_from_manifest(archive, manifest)
         if sharded is not None:
             return sharded
 
-    for name in archive.namelist():
-        if name.lower().endswith("conversations.json"):
+    # Match the basename exactly: sectioned_conversations.json is a different (often empty) document.
+    for name in sorted(archive.namelist(), key=lambda name: (name.count("/"), len(name))):
+        if PurePosixPath(name).name.lower() == "conversations.json":
             with archive.open(name) as handle:
                 return json.load(handle)
     raise ImportParseError("ChatGPT export zip did not contain a recognizable conversations document.")

@@ -10,11 +10,13 @@ import { cn } from './cn'
 import { api, type ConversationAttachment, type ConversationDetail, type ConversationListItem, type ImportRecord, type ImportSource, type SessionState } from './api'
 import chatgptLogo from './assets/providers/chatgpt.svg'
 import claudeLogo from './assets/providers/claude.svg'
+import claudeCodeLogo from './assets/providers/claudecode.svg'
 import geminiLogo from './assets/providers/gemini.svg'
 import googleAiStudioLogo from './assets/providers/googleaistudio.png'
 import kimiLogo from './assets/providers/kimi.png'
 import lobeChatLogo from './assets/providers/lobechat.png'
 import metaLogo from './assets/providers/meta.png'
+import mochiLogo from './assets/providers/mochi.svg'
 import piLogo from './assets/providers/pi.svg'
 
 // ── Marked config ──
@@ -347,11 +349,13 @@ function ProviderBadge({ provider }: { provider: string }) {
   const logos = {
     chatgpt: chatgptLogo,
     claude: claudeLogo,
+    claudecode: claudeCodeLogo,
     gemini: geminiLogo,
     googleaistudio: googleAiStudioLogo,
     kimi: kimiLogo,
     lobechat: lobeChatLogo,
     meta: metaLogo,
+    mochi: mochiLogo,
     pi: piLogo,
   } as const
 
@@ -359,6 +363,8 @@ function ProviderBadge({ provider }: { provider: string }) {
   let logo: keyof typeof logos | null = null
   let label = provider
   if (p.includes('chatgpt') || p.includes('openai')) { logo = 'chatgpt'; label = 'ChatGPT' }
+  else if (p === 'claudecode') { logo = 'claudecode'; label = 'Claude Code' }
+  else if (p === 'mochi') { logo = 'mochi'; label = 'Mochi' }
   else if (p.includes('claude') || p.includes('anthropic')) { logo = 'claude'; label = 'Claude' }
   else if (p.includes('googleaistudio') || p.includes('google ai studio')) {
     logo = 'googleaistudio'
@@ -730,7 +736,7 @@ function AppShell({ onLogout }: { onLogout: () => Promise<void> }) {
   const logout = async () => { await api.logout(); await onLogout(); navigate('/') }
 
   // Provider list
-  const knownProviders = ['chatgpt', 'claude', 'gemini', 'googleaistudio', 'kimi', 'meta', 'pi', 'lobechat'] as const
+  const knownProviders = ['chatgpt', 'claude', 'gemini', 'googleaistudio', 'kimi', 'meta', 'pi', 'lobechat', 'claudecode', 'mochi'] as const
   const providerOptions = [
     ...knownProviders.filter((item) => providerCounts[item] != null),
     ...Object.keys(providerCounts)

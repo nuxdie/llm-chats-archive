@@ -19,6 +19,8 @@ class ImportParseError(Exception):
 
 def parse_export(export_path: Path) -> dict[str, Any]:
     provider = detect_provider(export_path)
+    if provider == "native":
+        return parse_native_export(export_path)
     if provider == "lobechat":
         return parse_lobechat_export(export_path)
     if provider == "meta":
@@ -66,6 +68,8 @@ def detect_provider(export_path: Path) -> str:
                 return "gemini"
     if export_path.suffix.lower() == ".json" or lower_name.endswith(".json"):
         document = load_json_file(export_path)
+        if looks_like_native_export(document):
+            return "native"
         if looks_like_meta_conversations_document(document):
             return "meta"
         if looks_like_pi_export(document):
@@ -81,6 +85,77 @@ def detect_provider(export_path: Path) -> str:
         if looks_like_gemini(document) or "gemini" in lower_name or "bard" in lower_name:
             return "gemini"
     return "unknown"
+
+
+NATIVE_FORMAT = "llm-chats-archive/conversations-v1"
+NATIVE_PROVIDER = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
+
+
+def looks_like_native_export(document: Any) -> bool:
+    return isinstance(document, dict) and document.get("format") == NATIVE_FORMAT
+
+
+def parse_native_export(export_path: Path) -> dict[str, Any]:
+    """Conversations already in the archive's own shape, written by a tool that knows its source (Claude Code
+    transcripts, a desktop assistant's log). The provider is theirs to name; re-sending a grown conversation only
+    adds its new messages."""
+    document = load_json_file(export_path)
+    provider = str(document.get("provider") or "").strip().lower()
+    if not NATIVE_PROVIDER.match(provider):
+        raise ImportParseError("Native export needs a provider name (lowercase letters, digits, dashes).")
+    raw_conversations = document.get("conversations")
+    if not isinstance(raw_conversations, list):
+        raise ImportParseError("Native export did not contain a conversation list.")
+
+    normalized: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    message_total = 0
+    for index, conversation in enumerate(raw_conversations, start=1):
+        if not isinstance(conversation, dict) or not conversation.get("id"):
+            warnings.append(f"Skipped conversation #{index}: no id.")
+            continue
+        messages: list[dict[str, Any]] = []
+        for raw in conversation.get("messages") or []:
+            if not isinstance(raw, dict) or not str(raw.get("text") or "").strip():
+                continue
+            role = normalize_role(raw.get("role"))
+            messages.append(
+                {
+                    "provider_message_id": str(raw.get("id") or "") or None,
+                    "role": role,
+                    "author_name": raw.get("author") or None,
+                    "model": raw.get("model") or None,
+                    "created_at": iso_timestamp(raw.get("created_at")),
+                    "sequence": len(messages) + 1,
+                    "text": str(raw["text"]).strip(),
+                    "content": {"text": raw["text"]},
+                    "metadata": raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {},
+                    "attachments": [],
+                }
+            )
+        if not messages:
+            continue
+        normalized.append(
+            {
+                "provider": provider,
+                "provider_conversation_id": str(conversation["id"]),
+                "title": str(conversation.get("title") or "").strip()[:300] or f"Untitled {provider} conversation",
+                "created_at": iso_timestamp(conversation.get("created_at")) or messages[0].get("created_at"),
+                "updated_at": iso_timestamp(conversation.get("updated_at")) or messages[-1].get("created_at"),
+                "metadata": {**(conversation.get("metadata") if isinstance(conversation.get("metadata"), dict) else {}),
+                             "source": provider},
+                "messages": messages,
+            }
+        )
+        message_total += len(messages)
+
+    return {
+        "provider": provider,
+        "parser_version": f"{provider}:native-v1",
+        "conversations": normalized,
+        "warnings": warnings,
+        "summary": {"conversation_count": len(normalized), "message_count": message_total, "attachment_count": 0},
+    }
 
 
 def parse_lobechat_export(export_path: Path) -> dict[str, Any]:

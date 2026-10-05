@@ -63,6 +63,11 @@ In practice, it gives you a way to keep your AI conversations locally searchable
 | **Google AI Studio** | `.zip` | Structured conversations plus companion assets |
 | **Kimi** | `.json` | Browser capture bundle via `scripts/kimi-export.user.js` |
 | **Pi** | `.json` | History export with `user_data.details` and `user_data.messages` |
+| **Any (native)** | `.json` | `{"format": "llm-chats-archive/conversations-v1", "provider": "<name>", "conversations": [{"id", "title", "messages": [{"id", "role", "text", "created_at"}]}]}`, for tools that convert their own source (Claude Code sessions and Mochi arrive this way) |
+
+Feeds that run on a schedule use the command line inside the container instead of the upload page:
+`docker exec -i <container> python -m backend.app.cli sync <name> < export.json`. Everything a feed sends is filed
+under one standing import, `sync: <name>`, and a conversation sent again only gains its new messages.
 
 The importer preserves the original upload, normalizes conversations and messages into SQLite, and logs warnings for anything it cannot parse cleanly.
 

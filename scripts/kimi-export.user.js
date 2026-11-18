@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Unified Chat Archive - Kimi Export
 // @namespace    https://github.com/
-// @version      0.1.0
-// @description  Capture Kimi history and chats into a JSON bundle for the Unified Chat Archive
+// @version      0.2.0
+// @description  Capture Kimi history into compact JSON shards for the Unified Chat Archive
 // @match        https://www.kimi.com/chat/history*
 // @grant        none
 // ==/UserScript==
@@ -15,6 +15,7 @@
   const API_BASE = 'https://www.kimi.com/apiv2'
   const PAGE_SIZE = 1000
   const CONCURRENCY = 3
+  const CHUNK_SIZE = 100
 
   function decodeJwtPayload(token) {
     if (typeof token !== 'string') return null
@@ -74,6 +75,10 @@
     const valid = [...new Set(candidates.filter((token) => typeof token === 'string' && token))]
     valid.sort((left, right) => tokenScore(right) - tokenScore(left))
     return valid[0] || ''
+  }
+
+  function sleep(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds))
   }
 
   function guessFilename(url, fallback) {
@@ -144,7 +149,9 @@
 
     if (!response.ok) {
       const text = await response.text()
-      throw new Error(`${path} failed with ${response.status}: ${text.slice(0, 300)}`)
+      const error = new Error(`${path} failed with ${response.status}: ${text.slice(0, 300)}`)
+      error.status = response.status
+      throw error
     }
 
     return response.json()
@@ -546,7 +553,6 @@
       text,
       attachments,
       metadata,
-      raw: rawMessage,
     }
   }
 
@@ -582,7 +588,10 @@
       seen.add(key)
       normalized.push(normalizedMessage)
     }
-    return normalized
+    // Kimi returns ListMessages pages newest-first, including assistant replies
+    // before the user prompt when both share the same second-level timestamp.
+    // Reverse once after de-duplication so exported turns read chronologically.
+    return normalized.reverse()
   }
 
   async function fetchChatBundle(chat, updateStatus) {
@@ -607,7 +616,7 @@
       chat_id: chat.chat_id,
       history: chat,
       chat: getChat,
-      message_pages: pages,
+      message_pages: [],
       messages: extractNormalizedMessages(pages),
       warnings: [],
     }
@@ -636,7 +645,15 @@
     document.body.appendChild(anchor)
     anchor.click()
     anchor.remove()
-    URL.revokeObjectURL(url)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  function historyGroupsForChats(historyGroups, chatIds) {
+    const included = new Set(chatIds)
+    return historyGroups.map((group) => ({
+      ...group,
+      items: Array.isArray(group.items) ? group.items.filter((item) => included.has(item?.chat_id)) : [],
+    })).filter((group) => group.items.length)
   }
 
   function createButton() {
@@ -671,56 +688,72 @@
       button.textContent = `${message} (${completed}/${chats.length})`
     }
 
-    button.disabled = true
-    button.style.opacity = '0.85'
     updateStatus('Starting')
-
-    const warnings = []
-    const capturedChats = await mapLimit(chats, CONCURRENCY, async (chat) => {
-      try {
-        const result = await fetchChatBundle(chat, updateStatus)
-        completed += 1
-        updateStatus('Captured')
-        return result
-      } catch (error) {
-        completed += 1
-        warnings.push(`${chat.chat_id}: ${error instanceof Error ? error.message : String(error)}`)
-        updateStatus('Warning')
-        return {
-          chat_id: chat.chat_id,
-          history: chat,
-          chat: null,
-          message_pages: [],
-          messages: [],
-          warnings: [error instanceof Error ? error.message : String(error)],
+    const exportId = new Date().toISOString().replace(/[:.]/g, '-')
+    const totalParts = Math.ceil(chats.length / CHUNK_SIZE)
+    for (let start = 0; start < chats.length; start += CHUNK_SIZE) {
+      const chunkChats = chats.slice(start, start + CHUNK_SIZE)
+      const chunkIds = chunkChats.map((chat) => chat.chat_id)
+      const warnings = []
+      const capturedChats = await mapLimit(chunkChats, CONCURRENCY, async (chat) => {
+        try {
+          const result = await fetchChatBundle(chat, updateStatus)
+          completed += 1
+          updateStatus('Captured')
+          return result
+        } catch (error) {
+          if (error?.status === 401) throw error
+          completed += 1
+          const message = error instanceof Error ? error.message : String(error)
+          warnings.push(`${chat.chat_id}: ${message}`)
+          updateStatus('Warning')
+          return {
+            chat_id: chat.chat_id,
+            history: chat,
+            chat: null,
+            message_pages: [],
+            messages: [],
+            warnings: [message],
+          }
         }
-      }
-    })
+      })
 
-    const bundle = {
-      provider: 'kimi',
-      schema_version: 'kimi-capture-v1',
-      captured_at: new Date().toISOString(),
-      source: {
-        history_url: location.href,
-        origin: location.origin,
-        user_agent: navigator.userAgent,
-      },
-      history_groups: historyGroups,
-      chats: capturedChats,
-      warnings,
+      const bundle = {
+        provider: 'kimi',
+        schema_version: 'kimi-capture-v1',
+        captured_at: new Date().toISOString(),
+        export_id: exportId,
+        part: Math.floor(start / CHUNK_SIZE) + 1,
+        total_parts: totalParts,
+        source: {
+          history_url: location.href,
+          origin: location.origin,
+          user_agent: navigator.userAgent,
+        },
+        history_groups: historyGroupsForChats(historyGroups, chunkIds),
+        chats: capturedChats,
+        warnings,
+      }
+
+      const part = String(bundle.part).padStart(3, '0')
+      downloadJson(`kimi-export-${exportId}-part-${part}-of-${totalParts}.json`, bundle)
+      button.textContent = `Saved part ${part}/${totalParts} (${completed}/${chats.length})`
+      await sleep(500)
     }
 
-    downloadJson(`kimi-export-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, bundle)
-    button.textContent = `Exported ${capturedChats.length} chats`
-    button.disabled = false
-    button.style.opacity = '1'
+    button.textContent = `Exported ${chats.length} chats in ${totalParts} parts`
   }
 
   button.addEventListener('click', () => {
+    if (button.disabled) return
+    button.disabled = true
+    button.style.opacity = '0.85'
     runExport().catch((error) => {
       console.error('Kimi export failed', error)
-      button.textContent = 'Export failed - check console'
+      button.textContent = error?.status === 401
+        ? 'Login expired - sign in and run the export again'
+        : 'Export failed - check console'
+    }).finally(() => {
       button.disabled = false
       button.style.opacity = '1'
     })

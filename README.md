@@ -119,7 +119,12 @@ Kimi does not expose a native export, so this project ships a browser-side colle
 1. Install `scripts/kimi-export.user.js` in Tampermonkey or Violentmonkey.
 2. Open `https://www.kimi.com/chat/history` while logged in.
 3. Click the **Export Kimi** button injected by the script.
-4. Wait for the `kimi-export-...json` bundle to download.
-5. Upload it via the Import drawer in the archive app.
+4. Allow multiple downloads when the browser asks. Large histories are saved as
+   self-contained `kimi-export-...-part-NNN-of-NNN.json` shards of 100 chats each.
+5. Upload each shard via the Import drawer in the archive app.
 
 The userscript runs inside your authenticated browser session and downloads a sanitized JSON bundle — your Kimi auth token is never stored in the archive.
+
+Each shard is immediately usable by the importer. If the Kimi session expires,
+the exporter stops on the first `401` instead of silently writing empty
+conversations; shards downloaded before that point remain valid.
